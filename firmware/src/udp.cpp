@@ -5,6 +5,38 @@
 
 static int sock = -1;
 static struct sockaddr_in dest_addr;
+static uint32_t tx_sequence = 0; //counter for sequence number
+constexpr size_t UDP_HEADER_SIZE = 5;
+
+// Helper for sending packets (audio and video)
+static bool send_packet(uint8_t type, const uint8_t *payload, size_t payload_size){
+    size_t packet_size = 1 + sizeof(uint32_t) + payload_size; // calculate packet size
+
+    uint8_t *send_buf = (uint8_t *)malloc(packet_size); // allocate memory matching packet size
+
+    if (!send_buf) {
+        return false;   // if it doesnt work
+    }
+    // Build Packet:
+    // type:
+    send_buf[0] = type;                     // first byte: frame type (video or audio)
+    // sequence:
+    uint32_t sequence = htonl(tx_sequence); // convert number to network order
+    memcpy(&send_buf[1], &sequence, sizeof(sequence)); // copy 4‑byte seq
+    // payload:
+    memcpy(&send_buf[1 + sizeof(sequence)], payload, payload_size); // place payload right after sequence
+
+    // send:
+    int result = sendto(sock, send_buf, packet_size, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
+
+    free(send_buf);           // free memory
+
+    if (result < 0) {
+        return false;         // transmission failed
+    }
+    tx_sequence++;            // advance counter for the next packet
+    return true;              // success
+}
 
 void setupNetwork(const char* ssid, const char* password, const char* server_ip, const int port) {
     WiFi.mode(WIFI_STA);
@@ -29,7 +61,6 @@ void setupNetwork(const char* ssid, const char* password, const char* server_ip,
 void udp_send_task(void *pvParameters) {
     video_frame_t video_frame;
     audio_buffer_t audio_buf;
-    uint8_t *send_buf = NULL;
 
     while(1) {
         if (sock < 0) {
@@ -38,28 +69,15 @@ void udp_send_task(void *pvParameters) {
         }
 
         // udp: fire and forget
+        
         while (xQueueReceive(audio_tx_queue, &audio_buf, 0) == pdTRUE) {
-            size_t audio_size = audio_buf.count * sizeof(int16_t);
-            send_buf = (uint8_t*)malloc(1 + audio_size);
-            if (send_buf) {
-                send_buf[0] = WS_FRAME_AUDIO_TX;
-                memcpy(&send_buf[1], audio_buf.samples, audio_size);
-                sendto(sock, send_buf, 1 + audio_size, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-                free(send_buf);
-            }
+            send_packet(WS_FRAME_AUDIO_TX, reinterpret_cast<uint8_t *>(audio_buf.samples), audio_size);
         }
 
         while (xQueueReceive(video_queue, &video_frame, 0) == pdTRUE) {
-            send_buf = (uint8_t*)malloc(1 + video_frame.len);
-            if (send_buf) {
-                send_buf[0] = WS_FRAME_VIDEO;
-                memcpy(&send_buf[1], video_frame.data, video_frame.len);
-                sendto(sock, send_buf, 1 + video_frame.len, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-                free(send_buf);
-            }
-            free(video_frame.data); 
+            send_packet(WS_FRAME_VIDEO, video_frame.data, video_frame.len);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(5));
+        vTaskDelay(pdMS_TO_TICKS(5)); // wait 5 ms
     }
 }
