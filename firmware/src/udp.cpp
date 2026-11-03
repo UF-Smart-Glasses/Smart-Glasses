@@ -5,17 +5,19 @@
 
 static int sock = -1;
 static struct sockaddr_in dest_addr;
-static uint32_t tx_sequence = 0; //counter for sequence number
 constexpr size_t UDP_HEADER_SIZE = 5;
 
 // Helper for sending packets (audio and video)
-static bool send_packet(uint8_t type, const uint8_t *payload, size_t payload_size){
+static void send_packet(uint8_t type, const uint8_t *payload, size_t payload_size) {
+    static uint32_t tx_sequence = 0; //counter for sequence number
+
     size_t packet_size = 1 + sizeof(uint32_t) + payload_size; // calculate packet size
 
     uint8_t *send_buf = (uint8_t *)malloc(packet_size); // allocate memory matching packet size
 
     if (!send_buf) {
-        return false;   // if it doesnt work
+        Serial.println("[Error] Packet memory allocation failed");
+        return;
     }
     // Build Packet:
     // type:
@@ -32,10 +34,10 @@ static bool send_packet(uint8_t type, const uint8_t *payload, size_t payload_siz
     free(send_buf);           // free memory
 
     if (result < 0) {
-        return false;         // transmission failed
+        Serial.println("[Error] Packet send failed.");
+        return;
     }
     tx_sequence++;            // advance counter for the next packet
-    return true;              // success
 }
 
 void setupNetwork(const char* ssid, const char* password, const char* server_ip, const int port) {
@@ -71,11 +73,12 @@ void udp_send_task(void *pvParameters) {
         // udp: fire and forget
         
         while (xQueueReceive(audio_tx_queue, &audio_buf, 0) == pdTRUE) {
-            send_packet(WS_FRAME_AUDIO_TX, reinterpret_cast<uint8_t *>(audio_buf.samples), audio_size);
+            send_packet(WS_FRAME_AUDIO_TX, reinterpret_cast<uint8_t *>(audio_buf.samples), audio_buf.count * sizeof(int16_t));
         }
 
         while (xQueueReceive(video_queue, &video_frame, 0) == pdTRUE) {
             send_packet(WS_FRAME_VIDEO, video_frame.data, video_frame.len);
+            free(video_frame.data);
         }
 
         vTaskDelay(pdMS_TO_TICKS(5)); // wait 5 ms

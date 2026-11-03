@@ -4,8 +4,8 @@
 #include <freertos/queue.h>
 
 //frame headers
-#define WS_FRAME_VIDEO 0x01
-#define WS_FRAME_AUDIO_TX 0x02
+constexpr uint8_t WS_FRAME_VIDEO = 0x01;
+constexpr uint8_t WS_FRAME_AUDIO_TX = 0x02;
 
 //struct for buffer
 typedef struct {

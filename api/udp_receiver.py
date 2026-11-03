@@ -5,7 +5,14 @@ import threading
 from core import config
 from core.shared_mem import SharedMem
 
+# ints that would never be returned as number of packets lost:
+SEQUENCE_LATE = 0
+SEQUENCE_FIRST = -1
+SEQUENCE_IN_ORDER = -2
+
+
 udp_shutdown_event = threading.Event()
+
 
 # helper class to check in what sequence packets are arriving
 class SequenceTracker:
@@ -17,24 +24,24 @@ class SequenceTracker:
 
         if self.expected is None:
             self.expected = (sequence + 1) & 0xFFFFFFFF # for unsigned 32 bit behavior
-            return "first"
+            return SEQUENCE_FIRST
 
         diff = (sequence - self.expected) & 0xFFFFFFFF
 
         if diff == 0:
             self.expected = (self.expected + 1) & 0xFFFFFFFF
-            return "in_order"
+            return SEQUENCE_IN_ORDER
 
-        # Interpret diff as signed 32-bit
+        # Interpret diff as signed 32-bit and check if negative (meaning its late)
         if diff & 0x80000000:
-            return "late"
+            return SEQUENCE_LATE
 
         # Packet is ahead of what we expected
         missed = diff
 
         self.expected = (sequence + 1) & 0xFFFFFFFF
 
-        return f"missing {missed} packet(s)"
+        return missed 
 
 
 
@@ -57,11 +64,12 @@ def udp_receiver_thread(shared_mem: SharedMem) -> None:
                 continue
 
             if len(data) < 5:
-                print("[System] Received malformed UDP packet")
+                print("[System] Received malformed UDP packet.")
                 continue
 
             header = data[0:1]
             if header not in (config.HEADER_VISION, config.HEADER_AUDIO):
+                print("[System] Received unknown type of packet/corrupt packet.")
                 continue
 
             sequence = int.from_bytes(
@@ -73,8 +81,9 @@ def udp_receiver_thread(shared_mem: SharedMem) -> None:
             
             result = sequence_tracker.update(sequence)
 
-            if result != "in_order" and result != "first":
-                print(f"[System] UDP sequence: {sequence} -> {result}")
+            # Only alert how many are missing and latest sequence if packets are missing
+            if result > 0:
+                print(f"[System] UDP sequence: {sequence} -> missing {result} packet(s)")
 
             if header == config.HEADER_VISION:
                 if shared_mem.vision_queue.full():
